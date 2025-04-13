@@ -327,6 +327,7 @@ public class Library {
 
     /**
      * The duration of time to keep the cached (downloaded) library for
+     *
      * @return the duration
      */
     public Duration getCacheDuration() {
