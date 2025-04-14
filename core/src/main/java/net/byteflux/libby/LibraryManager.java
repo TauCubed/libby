@@ -35,7 +35,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
@@ -519,7 +518,12 @@ public abstract class LibraryManager {
                 // write timestamp of download
                 Path timestampFile = file.getParent().resolve(file.getFileName() + ".timestamp");
                 byte[] timestampData = Instant.now().toString().getBytes(StandardCharsets.UTF_8);
-                Files.write(timestampFile, timestampData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                if (!Files.exists(timestampFile) || Files.isRegularFile(timestampFile)) {
+                    Files.write(timestampFile,timestampData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                } else {
+                    logger.warn("Failed to write .timestamp for library: " + library
+                        + " path exists but is not a regular file:" + timestampFile);
+                }
 
                 return file;
             }
@@ -540,8 +544,8 @@ public abstract class LibraryManager {
      *
      * @param file The library file to check
      * @param expiryTime The time before expiry
-     * @return false if the duration isZero, true if it has either expired or the .timestamp file is missing/corrupt
-     * @throws IOException if an IO error occurs
+     * @return true if the duration is isZero, the file has expired or the .timestamp file is missing/corrupt.
+     * @throws IOException if the file is corrupt, but deletion failed
      */
     private boolean hasCachedVersionExpired(Path file, Duration expiryTime) throws IOException {
         if (expiryTime.isZero())
@@ -549,28 +553,26 @@ public abstract class LibraryManager {
 
         Path downloadedAt = file.getParent().resolve(file.getFileName() + ".timestamp");
 
-        if (!Files.isRegularFile(downloadedAt)) {
-            if (Files.exists(downloadedAt))
-                throw new FileNotFoundException(downloadedAt + " exists but it not a file");
+        if (!Files.isRegularFile(downloadedAt))
             return true;
-        }
 
         try {
+            // java doesn't have a bounded InputStream/Reader class, and I don't wish to make one for this.
+            if (Files.size(downloadedAt) > 10000)
+                throw new IOException();
+
             Instant then;
-            // safer than readAllBytes as it will error out early if the file is huge
             try (BufferedReader reader = Files.newBufferedReader(downloadedAt, StandardCharsets.UTF_8)) {
                 then = Instant.parse(reader.readLine());
-            } catch (DateTimeParseException e) {
-                // silently fail
-                Files.delete(downloadedAt);
-                return true;
             }
 
             return then.plus(expiryTime).isBefore(Instant.now());
         } catch (Exception e) {
+            // silently fail if corrupt
             Files.delete(downloadedAt);
-            throw e;
         }
+
+        return true;
     }
 
     /**
